@@ -26,6 +26,30 @@ extract_set() {
     | sed 's/$/,/'
 }
 
+emit_list() {
+    local file="$1"
+    if [[ ! -s "$file" ]]; then
+        return 0
+    fi
+
+    awk '
+        { buf[NR] = $0 }
+        END {
+            if (NR == 1) {
+                sub(/,[[:space:]]*$/, "", buf[1]);
+                print "\t" buf[1];
+            } else {
+                for (i = 1; i < NR; i++) {
+                print "\t" buf[i];
+                }
+                sub(/,[[:space:]]*$/, "", buf[NR]);
+                print "\t" buf[NR];
+            }
+        }
+    ' "$file"
+}
+
+
 # Empty the File
 > "$OUTPUT"
 
@@ -52,32 +76,26 @@ fi
 # Output
 {
     echo "define SELF_PREFIXES_IPV4 = ["
-    if [[ -s "$TMP_IPV4_SELF" ]]; then
-        sed 's/^/\t/' "$TMP_IPV4_SELF"
-    fi
+    emit_list "$TMP_IPV4_SELF"
     echo "];"
     echo
+
     echo "define SELF_PREFIXES_IPV6 = ["
-    if [[ -s "$TMP_IPV6_SELF" ]]; then
-        sed 's/^/\t/' "$TMP_IPV6_SELF"
-    fi
+    emit_list "$TMP_IPV6_SELF"
     echo "];"
     echo
+
     echo "define ASN_DOWNSTREAM = ["
-    if [[ -s "$TMP_ASN_DOWN" ]]; then
-        sed 's/^/\t/' "$TMP_ASN_DOWN"
-    fi
+    emit_list "$TMP_ASN_DOWN"
     echo "];"
     echo
-    echo "define DOWNSTERAM_PREFIXES_IPV4 = ["
-    if [[ -s "$TMP_IPV4_DOWN" ]]; then
-        sed 's/^/\t/' "$TMP_IPV4_DOWN"
-    fi
+
+    echo "define DOWNSTREAM_PREFIXES_IPV4 = ["
+    emit_list "$TMP_IPV4_DOWN"
     echo "];"
     echo
+
     echo "define DOWNSTREAM_PREFIXES_IPV6 = ["
-    if [[ -s "$TMP_IPV6_DOWN" ]]; then
-        sed 's/^/\t/' "$TMP_IPV6_DOWN"
-    fi
+    emit_list "$TMP_IPV6_DOWN"
     echo "];"
 } >> "$OUTPUT"
