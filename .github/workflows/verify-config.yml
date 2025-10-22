@@ -76,34 +76,67 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
         
+      - name: Stage Files
+        if: steps.birdcheck.outputs.ok == 'true'
+        id: stage
+        run: |
+          set -euxo pipefail
+          STAGE_DIR="$(mktemp -d)"
+          echo "stage_dir=$STAGE_DIR" >> "$GITHUB_OUTPUT"
+          shopt -s extglob dotglob
+          mkdir -p "$STAGE_DIR"
+          for f in * .[^.]*; do
+            case "$f" in
+              .git|.github|bgpq4|bird.conf|README.md|LICENSE) continue ;;
+            esac
+            cp -a "$f" "$STAGE_DIR"/
+          done
+
       - name: Prepare prod Branch
         if: steps.birdcheck.outputs.ok == 'true'
+        id: prep
         run: |
           set -euxo pipefail
           git fetch origin
-          if git show-ref --verify --quiet refs/remotes/origin/prod; then
-            git checkout prod
-            git reset --hard origin/main
+          if git ls-remote --exit-code --heads origin prod >/dev/null 2>&1; then
+            git checkout -B prod origin/prod
+            git pull --ff-only origin prod
+            echo "target_dir=." >> "$GITHUB_OUTPUT"
+            echo "has_prod=true" >> "$GITHUB_OUTPUT"
           else
-            git checkout -b prod origin/main
+            git checkout --orphan prod
+            find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+            mkdir -p config
+            echo "target_dir=config" >> "$GITHUB_OUTPUT"
+            echo "has_prod=false" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Clean Up Files
+        
+      - name: Populate prod from Staged Files
         if: steps.birdcheck.outputs.ok == 'true'
         run: |
           set -euxo pipefail
-          rm -rf .github || true
-          rm -rf bgpq4 || true
-          rm -f bird.conf README.md LICENSE || true   
+          STAGE_DIR="${{ steps.stage.outputs.stage_dir }}"
+          TARGET_DIR="${{ steps.prep.outputs.target_dir }}"
+          if [ "$TARGET_DIR" = "." ]; then
+            find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          else
+            rm -rf "$TARGET_DIR"/*
+          fi
+          rsync -a "$STAGE_DIR"/ "$TARGET_DIR"/
+          git add -A
     
       - name: Commit and Push
         if: steps.birdcheck.outputs.ok == 'true'
         run: |
           set -euxo pipefail
-          if git status --porcelain | grep -q .; then
-            git add -A
-            git commit -m "Verify Configuration ($(date -u '+%Y-%m-%d %H:%M:%S') UTC)"
-            git push --force-with-lease origin prod
+          if git diff --cached --quiet; then
+            echo "⚠️ No Changes to Commit."
           else
-            echo "⚠️ No changes to commit."
+            git commit -m "Verify Configuration ($(date -u '+%Y-%m-%d %H:%M:%S') UTC)"
+            if [ "${{ steps.prep.outputs.has_prod }}" = "true" ]; then
+              git push --force-with-lease origin prod
+            else
+              git push -u origin prod
+            fi
           fi
+
