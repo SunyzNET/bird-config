@@ -43,13 +43,13 @@ jobs:
           set -euxo pipefail
           SOCK="/run/bird-test.ctl"
           PID="/run/bird-test.pid"
-          /usr/sbin/bird -c /etc/bird/bird.conf -s "$SOCK" -P "$PID" || true
+          sudo /usr/sbin/bird -c /etc/bird/bird.conf -s "$SOCK" -P "$PID" || true
           for i in $(seq 1 10); do
             [ -S "$SOCK" ] && break
             sleep 0.5
           done
           set +e
-          OUT="$(/usr/sbin/birdc -s "$SOCK" configure check 2>&1 || true)"
+          OUT="$(sudo /usr/sbin/birdc -s "$SOCK" configure check 2>&1 || true)"
           set -e
           echo "----- BIRD Configure Check Output Start -----"
           echo "$OUT"
