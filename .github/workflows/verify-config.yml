@@ -1,0 +1,98 @@
+name: Verify Configuration
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-push:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout main Branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+    
+      - name: Install BIRD2 (CZ.NIC)
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get -y install apt-transport-https ca-certificates wget gnupg git
+          sudo wget -O /usr/share/keyrings/cznic-labs-pkg.gpg https://pkg.labs.nic.cz/gpg
+          echo "deb [signed-by=/usr/share/keyrings/cznic-labs-pkg.gpg] https://pkg.labs.nic.cz/bird2 noble main" | sudo tee /etc/apt/sources.list.d/cznic-labs-bird2.list
+          sudo apt-get update
+          sudo apt-get -y install bird2
+
+      - name: Copy Files to /etc/bird
+        run: |
+          set -euxo pipefail
+          test -f bird.conf || { echo "❌ bird.conf Not Found."; exit 1; }
+          sudo mkdir -p /etc/bird
+          sudo find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec cp -a {} /etc/bird/ \;
+          sudo chown -R bird:bird /etc/bird
+
+      - name: Verify BIRD configuration
+        id: birdcheck
+        run: |
+          set -euxo pipefail
+          OUT="$(/usr/sbin/birdc configure check 2>&1 || true)"
+          echo "----- BIRD Configure Check Output Start -----"
+          echo "$OUT"
+          echo "----- BIRD Configure Check Output End -----"
+
+          if echo "$OUT" | grep -q "Configuration OK"; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+
+      - name: Stop if Configuration Failed
+        if: steps.birdcheck.outputs.ok != 'true'
+        run: |
+          echo "❌ Failed to Configure BIRD2."
+          exit 1
+
+      - name: Configure Git Identity
+        if: steps.birdcheck.outputs.ok == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+      - name: Prepare prod Branch
+        if: steps.birdcheck.outputs.ok == 'true'
+        run: |
+          set -euxo pipefail
+          git fetch origin
+          if git show-ref --verify --quiet refs/remotes/origin/prod; then
+            git checkout prod
+            git reset --hard origin/main
+          else
+            git checkout -b prod origin/main
+          fi
+
+      - name: Clean Up Files
+        if: steps.birdcheck.outputs.ok == 'true'
+        run: |
+          set -euxo pipefail
+          rm -rf .github || true
+          rm -rf bgpq4 || true
+          rm -f bird.conf README.md LICENSE || true   
+    
+      - name: Commit and Push
+        if: steps.birdcheck.outputs.ok == 'true'
+        run: |
+          set -euxo pipefail
+          if [[ -n "$(git status --porcelain -- "$OUTPUT")" ]]; then
+            git add "$OUTPUT"
+            git commit -m "Verify Configuration ($(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+            git push origin prod
+          else
+            echo "⚠️ No changes to commit."
+          fi
