@@ -102,8 +102,8 @@ jobs:
           set -euxo pipefail
           if git status --porcelain | grep -q .; then
             git add -A
-            git commit -m "Verify Configuration ($(date -u '+%Y-%m-%d %H:%M:%S') UTC"
-            git push origin prod
+            git commit -m "Verify Configuration ($(date -u '+%Y-%m-%d %H:%M:%S') UTC)"
+            git push --force-with-lease origin prod
           else
             echo "⚠️ No changes to commit."
           fi
