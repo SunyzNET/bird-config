@@ -35,7 +35,7 @@ jobs:
           test -f bird.conf || { echo "❌ bird.conf Not Found."; exit 1; }
           sudo mkdir -p /etc/bird
           sudo find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec cp -a {} /etc/bird/ \;
-          sudo chown -R bird:bird /etc/bird
+          sudo chown -R root:root /etc/bird
 
       - name: Verify BIRD configuration
         id: birdcheck
@@ -43,14 +43,13 @@ jobs:
           set -euxo pipefail
           SOCK="/run/bird-test.ctl"
           PID="/run/bird-test.pid"
-          sudo bird -p -c /etc/bird/bird.conf
-          sudo bird -c /etc/bird/bird.conf -s "$SOCK" -P "$PID" || true
+          /usr/sbin/bird -c /etc/bird/bird.conf -s "$SOCK" -P "$PID" || true
           for i in $(seq 1 10); do
             [ -S "$SOCK" ] && break
             sleep 0.5
           done
           set +e
-          OUT="$(/usr/sbin/birdc configure check 2>&1 || true)"
+          OUT="$(/usr/sbin/birdc -s "$SOCK" configure check 2>&1 || true)"
           set -e
           echo "----- BIRD Configure Check Output Start -----"
           echo "$OUT"
@@ -101,8 +100,8 @@ jobs:
         if: steps.birdcheck.outputs.ok == 'true'
         run: |
           set -euxo pipefail
-          if [[ -n "$(git status --porcelain -- "$OUTPUT")" ]]; then
-            git add "$OUTPUT"
+          if git status --porcelain | grep -q .; then
+            git add -A
             git commit -m "Verify Configuration ($(date -u '+%Y-%m-%d %H:%M:%S') UTC"
             git push origin prod
           else
