@@ -18,7 +18,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-    
+
       - name: Install BIRD2 (CZ.NIC)
         run: |
           set -euxo pipefail
@@ -63,7 +63,6 @@ jobs:
             echo "ok=false" >> "$GITHUB_OUTPUT"
           fi
 
-
       - name: Stop if Configuration Failed
         if: steps.birdcheck.outputs.ok != 'true'
         run: |
@@ -75,7 +74,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-        
+
       - name: Stage Files
         if: steps.birdcheck.outputs.ok == 'true'
         id: stage
@@ -83,14 +82,18 @@ jobs:
           set -euxo pipefail
           STAGE_DIR="$(mktemp -d)"
           echo "stage_dir=$STAGE_DIR" >> "$GITHUB_OUTPUT"
-          shopt -s extglob dotglob
-          mkdir -p "$STAGE_DIR"
-          for f in * .[^.]*; do
-            case "$f" in
-              .git|.github|bgpq4|bird.conf|README.md|LICENSE) continue ;;
-            esac
-            cp -a "$f" "$STAGE_DIR"/
-          done
+          TMP_LIST="$(mktemp)"
+          find . -mindepth 1 -maxdepth 1 \
+            ! -name '.git' \
+            ! -name '.github' \
+            ! -name 'bgpq4' \
+            ! -name 'bird.conf' \
+            ! -name 'README.md' \
+            ! -name 'LICENSE' \
+            -print0 > "$TMP_LIST"
+          while IFS= read -r -d '' p; do
+            cp -a "$p" "$STAGE_DIR"/
+          done < "$TMP_LIST"
 
       - name: Prepare prod Branch
         if: steps.birdcheck.outputs.ok == 'true'
@@ -101,28 +104,20 @@ jobs:
           if git ls-remote --exit-code --heads origin prod >/dev/null 2>&1; then
             git checkout -B prod origin/prod
             git pull --ff-only origin prod
-            echo "target_dir=." >> "$GITHUB_OUTPUT"
             echo "has_prod=true" >> "$GITHUB_OUTPUT"
           else
             git checkout --orphan prod
             find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
-            mkdir -p config
-            echo "target_dir=config" >> "$GITHUB_OUTPUT"
             echo "has_prod=false" >> "$GITHUB_OUTPUT"
           fi
         
-      - name: Populate prod from Staged Files
+      - name: Populate prod from Staged Files (no rsync, root)
         if: steps.birdcheck.outputs.ok == 'true'
         run: |
           set -euxo pipefail
           STAGE_DIR="${{ steps.stage.outputs.stage_dir }}"
-          TARGET_DIR="${{ steps.prep.outputs.target_dir }}"
-          if [ "$TARGET_DIR" = "." ]; then
-            find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
-          else
-            rm -rf "$TARGET_DIR"/*
-          fi
-          rsync -a "$STAGE_DIR"/ "$TARGET_DIR"/
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -a "$STAGE_DIR"/. .
           git add -A
     
       - name: Commit and Push
@@ -139,4 +134,3 @@ jobs:
               git push -u origin prod
             fi
           fi
-
