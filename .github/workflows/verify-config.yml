@@ -41,11 +41,23 @@ jobs:
         id: birdcheck
         run: |
           set -euxo pipefail
+          SOCK="/run/bird-test.ctl"
+          PID="/run/bird-test.pid"
+          sudo bird -p -c /etc/bird/bird.conf
+          sudo bird -c /etc/bird/bird.conf -s "$SOCK" -P "$PID" || true
+          for i in $(seq 1 10); do
+            [ -S "$SOCK" ] && break
+            sleep 0.5
+          done
+          set +e
           OUT="$(/usr/sbin/birdc configure check 2>&1 || true)"
+          set -e
           echo "----- BIRD Configure Check Output Start -----"
           echo "$OUT"
           echo "----- BIRD Configure Check Output End -----"
-
+          if [ -f "$PID" ]; then
+            sudo kill "$(cat "$PID")" 2>/dev/null || true
+          fi
           if echo "$OUT" | grep -q "Configuration OK"; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
