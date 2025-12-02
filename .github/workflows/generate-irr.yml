@@ -12,7 +12,7 @@ env:
   ASN_LOCAL: "150289"
   AS_SET: "AS-SUNYZ"
   OUTPUT: "irr.conf"
-  WHOIS_SERVER: "whois.radb.net"
+  WHOIS_SERVER: "rr.ntt.net"
   IRR_SOURCES: "ARIN,APNIC,RIPE,AFRINIC,LACNIC,RADB,ALTDB"
 
 jobs:
