@@ -15,10 +15,31 @@ permissions:
   contents: write
 
 jobs:
+  changes:
+    name: Check Code Changes
+    runs-on: ubuntu-latest
+    outputs:
+      root: ${{ steps.filter.outputs.root }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Changed Paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            root:
+              - './**'
+
   verify-and-push:
     name: Verify Config and Push
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
+    needs:
+      - changes
+    if: (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && needs.changes.outputs.root == 'true'
     steps:
       - name: Checkout target branch
         uses: actions/checkout@v4
@@ -27,6 +48,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install BIRD2 (CZ.NIC)
+        id: install
         run: |
           set -euxo pipefail
           sudo apt-get update
@@ -37,6 +59,7 @@ jobs:
           sudo apt-get -y install bird2
 
       - name: Copy Files to /etc/bird
+        id: copy
         run: |
           set -euxo pipefail
           test -f bird.conf || { echo "❌ bird.conf Not Found."; exit 1; }
@@ -45,7 +68,7 @@ jobs:
           sudo chown -R root:root /etc/bird
 
       - name: Verify BIRD configuration
-        id: birdcheck
+        id: verify
         run: |
           set -euxo pipefail
           SOCK="/run/bird-test.ctl"
@@ -71,20 +94,20 @@ jobs:
           fi
 
       - name: Stop if Configuration Failed
-        if: steps.birdcheck.outputs.ok != 'true'
+        if: steps.verify.outputs.ok != 'true'
         run: |
           echo "❌ Failed to Configure BIRD2."
           exit 1
 
       - name: Configure Git Identity
-        if: steps.birdcheck.outputs.ok == 'true'
+        if: steps.verify.outputs.ok == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Stage Files
-        if: steps.birdcheck.outputs.ok == 'true'
         id: stage
+        if: steps.verify.outputs.ok == 'true'
         run: |
           set -euxo pipefail
           STAGE_DIR="$(mktemp -d)"
@@ -103,8 +126,8 @@ jobs:
           done < "$TMP_LIST"
 
       - name: Prepare prod Branch
-        if: steps.birdcheck.outputs.ok == 'true'
         id: prep
+        if: steps.verify.outputs.ok == 'true'
         run: |
           set -euxo pipefail
           git fetch origin
@@ -117,18 +140,20 @@ jobs:
             find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
             echo "has_prod=false" >> "$GITHUB_OUTPUT"
           fi
-        
+
       - name: Populate prod from Staged Files (no rsync, root)
-        if: steps.birdcheck.outputs.ok == 'true'
+        id: populate
+        if: steps.verify.outputs.ok == 'true'
         run: |
           set -euxo pipefail
           STAGE_DIR="${{ steps.stage.outputs.stage_dir }}"
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
           cp -a "$STAGE_DIR"/. .
           git add -A
-    
+
       - name: Commit and Push
-        if: steps.birdcheck.outputs.ok == 'true'
+        id: push
+        if: steps.verify.outputs.ok == 'true'
         run: |
           set -euxo pipefail
           if git diff --cached --quiet; then
