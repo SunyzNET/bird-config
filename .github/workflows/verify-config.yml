@@ -32,7 +32,7 @@ jobs:
         with:
           filters: |
             root:
-              - './**'
+              - './irr.conf'
 
   verify-and-push:
     name: Verify Config and Push
