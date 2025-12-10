@@ -17,6 +17,7 @@ env:
 
 jobs:
   generate:
+    name: Generate IRR.conf
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
