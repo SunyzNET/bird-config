@@ -5,46 +5,20 @@ on:
     branches:
       - main
   workflow_dispatch:
-  workflow_run:
-    workflows:
-      - Generate IRR Prefixes
-    types:
-      - completed
 
 permissions:
   contents: write
 
 jobs:
-  changes:
-    name: Check Code Changes
-    runs-on: ubuntu-latest
-    outputs:
-      root: ${{ steps.filter.outputs.root }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Detect Changed Paths
-        id: filter
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            root:
-              - './irr.conf'
-
   verify-and-push:
     name: Verify Config and Push
     runs-on: ubuntu-24.04
-    needs:
-      - changes
-    if: (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && needs.changes.outputs.root == 'true'
     steps:
-      - name: Checkout target branch
+      - name: Checkout
+        id: checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || 'main' }}
+          ref: "main"
           fetch-depth: 0
 
       - name: Install BIRD2 (CZ.NIC)
