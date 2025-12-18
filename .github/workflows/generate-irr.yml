@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changes: ${{ steps.commit.outputs.changes }}
+      msg: ${{ steps.commit.outputs.msg }}
     steps:
       - name: Checkout
         id: checkout
@@ -48,17 +49,19 @@ jobs:
 
           if [[ -n "$(git status --porcelain -- "$OUTPUT")" ]]; then
             git add "$OUTPUT"
-            git commit -m "Update IRR Data ($(date -u '+%Y-%m-%d %H:%M:%S') UTC)"
+            COMMIT_MSG="Update IRR Data ($(date -u '+%Y-%m-%d %H:%M:%S') UTC)"
+            git commit -m "$COMMIT_MSG"
             git push
-            echo "changes=true" >> "$GITHUB_ENV"
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+            echo "msg=$COMMIT_MSG" >> "$GITHUB_OUTPUT"
           else
             echo "No changes to commit."
-            echo "changes=false" >> "$GITHUB_ENV"
+            echo "changes=false" >> "$GITHUB_OUTPUT"
           fi
 
   verify-and-push:
     name: Verify Config and Push
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: generate
     if: needs.generate.outputs.changes == 'true'
     steps:
@@ -75,7 +78,7 @@ jobs:
           sudo apt-get update
           sudo apt-get -y install apt-transport-https ca-certificates wget gnupg git
           sudo wget -O /usr/share/keyrings/cznic-labs-pkg.gpg https://pkg.labs.nic.cz/gpg
-          echo "deb [signed-by=/usr/share/keyrings/cznic-labs-pkg.gpg] https://pkg.labs.nic.cz/bird2 noble main" | sudo tee /etc/apt/sources.list.d/cznic-labs-bird2.list
+          echo "deb [signed-by=/usr/share/keyrings/cznic-labs-pkg.gpg] https://pkg.labs.nic.cz/bird2 noble main" | sudo tee /etc/apt/sources.list.d/cznic-labs-bird2.list 
           sudo apt-get update
           sudo apt-get -y install bird2
 
@@ -112,6 +115,7 @@ jobs:
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
 
       - name: Stop if Configuration Failed
@@ -121,7 +125,6 @@ jobs:
           exit 1
 
       - name: Configure Git Identity
-        if: steps.verify.outputs.ok == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -133,7 +136,6 @@ jobs:
           set -euxo pipefail
           STAGE_DIR="$(mktemp -d)"
           echo "stage_dir=$STAGE_DIR" >> "$GITHUB_OUTPUT"
-          TMP_LIST="$(mktemp)"
           find . -mindepth 1 -maxdepth 1 \
             ! -name '.git' \
             ! -name '.github' \
@@ -141,49 +143,42 @@ jobs:
             ! -name 'bird.conf' \
             ! -name 'README.md' \
             ! -name 'LICENSE' \
-            -print0 > "$TMP_LIST"
-          while IFS= read -r -d '' p; do
-            cp -a "$p" "$STAGE_DIR"/
-          done < "$TMP_LIST"
+            -exec cp -a {} "$STAGE_DIR"/ \;
 
       - name: Prepare prod Branch
         id: prep
-        if: steps.verify.outputs.ok == 'true'
         run: |
           set -euxo pipefail
           git fetch origin
           if git ls-remote --exit-code --heads origin prod >/dev/null 2>&1; then
             git checkout -B prod origin/prod
-            git pull --ff-only origin prod
             echo "has_prod=true" >> "$GITHUB_OUTPUT"
           else
             git checkout --orphan prod
-            find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+            git rm -rf .
             echo "has_prod=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Populate prod from Staged Files (no rsync, root)
+      - name: Populate prod from Staged Files
         id: populate
-        if: steps.verify.outputs.ok == 'true'
         run: |
           set -euxo pipefail
           STAGE_DIR="${{ steps.stage.outputs.stage_dir }}"
-          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
           cp -a "$STAGE_DIR"/. .
           git add -A
 
       - name: Commit and Push
         id: push
-        if: steps.verify.outputs.ok == 'true'
+        env:
+          PREV_COMMIT_MSG: ${{ needs.generate.outputs.msg }}
         run: |
           set -euxo pipefail
           if git diff --cached --quiet; then
             echo "⚠️ No Changes to Commit."
           else
-            git commit -m "Verify Configuration ($(date -u '+%Y-%m-%d %H:%M:%S') UTC)"
+            git commit -m "Verified: $PREV_COMMIT_MSG"
             if [ "${{ steps.prep.outputs.has_prod }}" = "true" ]; then
               git push --force-with-lease origin prod
             else
               git push -u origin prod
-            fi
           fi
