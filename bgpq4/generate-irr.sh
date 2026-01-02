@@ -152,7 +152,7 @@ fi
 # Function: downstream_import_filter(int ASN) -> bool
 {
 	echo "function downstream_import_filter(int ASN) -> bool {"
-	echo -e "\tif !is_valid() then return false;"
+	echo -e "\tif is_invalid() then return false;"
 	echo -e "\tlc_add_in(ASN, 2);"
 	echo -e "\tif !(ASN ~ ASN_DOWNSTREAM) then return false;"
 	echo
