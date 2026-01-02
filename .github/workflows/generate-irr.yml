@@ -11,7 +11,8 @@ permissions:
 env:
   ASN_LOCAL: "150289"
   AS_SET: "AS-SUNYZ"
-  OUTPUT: "irr.conf"
+  IRR_OUTPUT: "irr.conf"
+  DOWNSTREAM_OUTPUT: "downstream.conf"
   WHOIS_SERVER: "rr.ntt.net"
   IRR_SOURCES: "ARIN,APNIC,RIPE,AFRINIC,LACNIC,RADB,ALTDB"
 
@@ -47,8 +48,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if [[ -n "$(git status --porcelain -- "$OUTPUT")" ]]; then
-            git add "$OUTPUT"
+          FILES=("$IRR_OUTPUT" "$DOWNSTREAM_OUTPUT")
+
+          if [[ -n "$(git status --porcelain -- "${FILES[@]}")" ]]; then
+            git add -- "${FILES[@]}"
             COMMIT_MSG="Update IRR Data ($(date -u '+%Y-%m-%d %H:%M:%S') UTC)"
             git commit -m "$COMMIT_MSG"
             git push
@@ -57,6 +60,7 @@ jobs:
           else
             echo "No changes to commit."
             echo "changes=false" >> "$GITHUB_OUTPUT"
+            echo "msg=No changes" >> "$GITHUB_OUTPUT"
           fi
 
   verify-and-push:
