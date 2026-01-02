@@ -181,4 +181,5 @@ jobs:
               git push --force-with-lease origin prod
             else
               git push -u origin prod
+            fi
           fi
