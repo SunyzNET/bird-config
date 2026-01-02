@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-# Environment Variables
 AS_SET="${AS_SET:-AS-SUNYZ}"
 ASN_LOCAL="${ASN_LOCAL:-150289}"
-OUTPUT="${OUTPUT:-irr.conf}"
+IRR_OUTPUT="${IRR_OUTPUT:-irr.conf}"
+DOWNSTREAM_OUTPUT="${DOWNSTREAM_OUTPUT:-downstream.conf}"
 WHOIS_SERVER="${WHOIS_SERVER:-whois.radb.net}"
 IRR_SOURCES="${IRR_SOURCES:-ARIN,RIPE,AFRINIC,APNIC,LACNIC,RADB,ALTDB}"
 
@@ -16,10 +16,7 @@ TMP_IPV4_SELF="$TMP_DIR/ipv4_self"
 TMP_IPV6_SELF="$TMP_DIR/ipv6_self"
 TMP_ASN_DOWN_DEFINE="$TMP_DIR/asn_down_define"
 TMP_ASN_DOWN_FILTERED="$TMP_DIR/asn_down_filtered"
-TMP_IPV4_DOWN="$TMP_DIR/ipv4_down"
-TMP_IPV6_DOWN="$TMP_DIR/ipv6_down"
 
-# Robust: extract list items between [ ] and split commas into lines
 extract_set() {
   awk '
     /\[/ {inside=1; next}
@@ -52,10 +49,11 @@ emit_list() {
   ' "$file"
 }
 
-# Empty the File
-> "$OUTPUT"
+# --------------------------
+# Generate irr.conf
+# --------------------------
+> "$IRR_OUTPUT"
 
-# Self Prefixes
 if [[ -n "$ASN_LOCAL" ]]; then
   echo "Fetching Prefixes for AS${ASN_LOCAL}..."
   bgpq4 -h "$WHOIS_SERVER" -S "$IRR_SOURCES" -b -4 "AS${ASN_LOCAL}" 2>/dev/null \
@@ -64,37 +62,26 @@ if [[ -n "$ASN_LOCAL" ]]; then
     | extract_set > "$TMP_IPV6_SELF" || true
 fi
 
-# Downstream ASNs + Downstream aggregate prefixes
 DOWNSTREAM_ASNS=()
 if [[ -n "$AS_SET" ]]; then
-  echo "Fetching Downstream Data for ${AS_SET}..."
+  echo "Fetching Downstream ASNs for ${AS_SET}..."
 
-  # Downstream ASN list from AS-SET
   bgpq4 -h "$WHOIS_SERVER" -S "$IRR_SOURCES" -t -b "$AS_SET" 2>/dev/null \
     | extract_set > "$TMP_ASN_DOWN_DEFINE" || true
 
-  # Filter out local ASN (so it won't be treated as downstream)
   if [[ -s "$TMP_ASN_DOWN_DEFINE" ]]; then
     grep -v "^${ASN_LOCAL},$" "$TMP_ASN_DOWN_DEFINE" > "$TMP_ASN_DOWN_FILTERED" || true
   else
     : > "$TMP_ASN_DOWN_FILTERED"
   fi
 
-  # Build array of downstream ASNs (numbers)
   while read -r line; do
     asn="${line%,}"
     [[ -z "$asn" ]] && continue
     DOWNSTREAM_ASNS+=("$asn")
   done < "$TMP_ASN_DOWN_FILTERED"
-
-  # Aggregate downstream prefixes for whole AS-SET (you asked to generate these again)
-  bgpq4 -h "$WHOIS_SERVER" -S "$IRR_SOURCES" -b -4 "$AS_SET" 2>/dev/null \
-    | extract_set > "$TMP_IPV4_DOWN" || true
-  bgpq4 -h "$WHOIS_SERVER" -S "$IRR_SOURCES" -b -6 "$AS_SET" 2>/dev/null \
-    | extract_set > "$TMP_IPV6_DOWN" || true
 fi
 
-# Output base lists
 {
   echo "define SELF_PREFIXES_IPV4 = ["
   emit_list "$TMP_IPV4_SELF"
@@ -110,19 +97,8 @@ fi
   emit_list "$TMP_ASN_DOWN_FILTERED"
   echo "];"
   echo
+} >> "$IRR_OUTPUT"
 
-  echo "define DOWNSTREAM_PREFIXES_IPV4 = ["
-  emit_list "$TMP_IPV4_DOWN"
-  echo "];"
-  echo
-
-  echo "define DOWNSTREAM_PREFIXES_IPV6 = ["
-  emit_list "$TMP_IPV6_DOWN"
-  echo "];"
-  echo
-} >> "$OUTPUT"
-
-# Per-downstream ASN prefix lists
 if [[ "${#DOWNSTREAM_ASNS[@]}" -gt 0 ]]; then
   echo "Fetching Per-Downstream Prefix Lists..."
   for asn in "${DOWNSTREAM_ASNS[@]}"; do
@@ -145,34 +121,71 @@ if [[ "${#DOWNSTREAM_ASNS[@]}" -gt 0 ]]; then
       emit_list "$tmp6"
       echo "];"
       echo
-    } >> "$OUTPUT"
+    } >> "$IRR_OUTPUT"
   done
 fi
 
-# Function: downstream_import_filter(int ASN) -> bool
+echo "Done. Wrote: $IRR_OUTPUT"
+
+# --------------------------
+# Generate downstream.conf
+# --------------------------
+> "$DOWNSTREAM_OUTPUT"
+
 {
 	echo "function downstream_import_filter(int ASN) -> bool {"
-	echo -e "\tif is_invalid() then return false;"
-	echo -e "\tlc_add_in(ASN, 2);"
-	echo -e "\tif !(ASN ~ ASN_DOWNSTREAM) then return false;"
-	echo
-	echo -e "\tcase net.type {"
-	echo -e "\t\tNET_IP4: {"
+	printf '\tif !is_valid() then return false;\n'
+	printf '\tlc_add_in(ASN, 2);\n'
+	printf '\tif !is_downstream_asn() then return false;\n'
+	printf '\n'
+	printf '\tcase net.type {\n'
+
+	# ---------------- IPv4 ----------------
+	printf '\t\tNET_IP4: {\n'
+
+	# Special ASN 114514: global match across all downstream prefix lists (IRR + CUSTOM)
+	printf '\t\t\tif (ASN = 114514) then {\n'
 	for asn in "${DOWNSTREAM_ASNS[@]}"; do
-		echo -e "\t\t\tif (ASN = ${asn}) then return net ~ DOWNSTREAM_PREFIXES_AS${asn}_IPV4;"
+		printf '\t\t\t\tif (net ~ DOWNSTREAM_PREFIXES_AS%s_IPV4) || (net ~ DOWNSTREAM_PREFIXES_AS%s_CUSTOM_IPV4) then return true;\n' "$asn" "$asn"
 	done
-	echo -e "\t\t\treturn false;"
-	echo -e "\t\t}"
-	echo -e "\t\tNET_IP6: {"
+	printf '\t\t\t\treturn false;\n'
+	printf '\t\t\t}\n'
+
+	# Normal case: ASN must be downstream, and match only its own IRR/CUSTOM list
+	printf '\t\t\tif !(ASN ~ ASN_DOWNSTREAM) then return false;\n'
 	for asn in "${DOWNSTREAM_ASNS[@]}"; do
-		echo -e "\t\t\tif (ASN = ${asn}) then return net ~ DOWNSTREAM_PREFIXES_AS${asn}_IPV6;"
+		printf '\t\t\tif (ASN = %s) then return (net ~ DOWNSTREAM_PREFIXES_AS%s_IPV4) || (net ~ DOWNSTREAM_PREFIXES_AS%s_CUSTOM_IPV4);\n' "$asn" "$asn" "$asn"
 	done
-	echo -e "\t\t\treturn false;"
-	echo -e "\t\t}"
-	echo -e "\t\telse: {"
-	echo -e "\t\t\tprint \"downstream_import_filter: unexpected net.type \", net.type, \" \", net;"
-	echo -e "\t\t\treturn false;"
-	echo -e "\t\t}"
-	echo -e "\t}"
+	printf '\t\t\treturn false;\n'
+	printf '\t\t}\n'
+
+	# ---------------- IPv6 ----------------
+	printf '\t\tNET_IP6: {\n'
+
+	# Special ASN 114514: global match across all downstream prefix lists (IRR + CUSTOM)
+	printf '\t\t\tif (ASN = 114514) then {\n'
+	for asn in "${DOWNSTREAM_ASNS[@]}"; do
+		printf '\t\t\t\tif (net ~ DOWNSTREAM_PREFIXES_AS%s_IPV6) || (net ~ DOWNSTREAM_PREFIXES_AS%s_CUSTOM_IPV6) then return true;\n' "$asn" "$asn"
+	done
+	printf '\t\t\t\treturn false;\n'
+	printf '\t\t\t}\n'
+
+	# Normal case: ASN must be downstream, and match only its own IRR/CUSTOM list
+	printf '\t\t\tif !(ASN ~ ASN_DOWNSTREAM) then return false;\n'
+	for asn in "${DOWNSTREAM_ASNS[@]}"; do
+		printf '\t\t\tif (ASN = %s) then return (net ~ DOWNSTREAM_PREFIXES_AS%s_IPV6) || (net ~ DOWNSTREAM_PREFIXES_AS%s_CUSTOM_IPV6);\n' "$asn" "$asn" "$asn"
+	done
+	printf '\t\t\treturn false;\n'
+	printf '\t\t}\n'
+
+	# ---------------- else ----------------
+	printf '\t\telse: {\n'
+	printf '\t\t\tprint "downstream_import_filter: unexpected net.type ", net.type, " ", net;\n'
+	printf '\t\t\treturn false;\n'
+	printf '\t\t}\n'
+
+	printf '\t}\n'
 	echo "}"
-} >> "$OUTPUT"
+} >> "$DOWNSTREAM_OUTPUT"
+
+echo "Done. Wrote: $DOWNSTREAM_OUTPUT"
