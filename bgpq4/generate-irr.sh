@@ -134,7 +134,7 @@ echo "Done. Wrote: $IRR_OUTPUT"
 
 {
 	echo "function downstream_import_filter(int ASN) -> bool {"
-	printf '\tif !is_valid() then return false;\n'
+	printf '\tif is_invalid() then return false;\n'
 	printf '\tlc_add_in(ASN, 2);\n'
 	printf '\tif !is_downstream_asn() then return false;\n'
 	printf '\n'
