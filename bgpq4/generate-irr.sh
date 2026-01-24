@@ -16,6 +16,8 @@ TMP_IPV4_SELF="$TMP_DIR/ipv4_self"
 TMP_IPV6_SELF="$TMP_DIR/ipv6_self"
 TMP_ASN_DOWN_DEFINE="$TMP_DIR/asn_down_define"
 TMP_ASN_DOWN_FILTERED="$TMP_DIR/asn_down_filtered"
+TMP_ALL_DOWN_IPV4="$TMP_DIR/all_down_ipv4"
+TMP_ALL_DOWN_IPV6="$TMP_DIR/all_down_ipv6"
 
 extract_set() {
   awk '
@@ -99,6 +101,10 @@ fi
   echo
 } >> "$IRR_OUTPUT"
 
+# Initialize aggregate downstream prefix files
+> "$TMP_ALL_DOWN_IPV4"
+> "$TMP_ALL_DOWN_IPV6"
+
 if [[ "${#DOWNSTREAM_ASNS[@]}" -gt 0 ]]; then
   echo "Fetching Per-Downstream Prefix Lists..."
   for asn in "${DOWNSTREAM_ASNS[@]}"; do
@@ -110,6 +116,10 @@ if [[ "${#DOWNSTREAM_ASNS[@]}" -gt 0 ]]; then
       | extract_set > "$tmp4" || true
     bgpq4 -h "$WHOIS_SERVER" -S "$IRR_SOURCES" -b -6 "AS${asn}" 2>/dev/null \
       | extract_set > "$tmp6" || true
+
+    # Append to aggregate files
+    cat "$tmp4" >> "$TMP_ALL_DOWN_IPV4"
+    cat "$tmp6" >> "$TMP_ALL_DOWN_IPV6"
 
     {
       echo "define DOWNSTREAM_PREFIXES_AS${asn}_IPV4 = ["
@@ -124,6 +134,19 @@ if [[ "${#DOWNSTREAM_ASNS[@]}" -gt 0 ]]; then
     } >> "$IRR_OUTPUT"
   done
 fi
+
+# Output aggregate downstream prefix lists
+{
+  echo "define DOWNSTREAM_PREFIXES_IPV4 = ["
+  emit_list "$TMP_ALL_DOWN_IPV4"
+  echo "];"
+  echo
+
+  echo "define DOWNSTREAM_PREFIXES_IPV6 = ["
+  emit_list "$TMP_ALL_DOWN_IPV6"
+  echo "];"
+  echo
+} >> "$IRR_OUTPUT"
 
 echo "Done. Wrote: $IRR_OUTPUT"
 
@@ -142,17 +165,7 @@ echo "Done. Wrote: $IRR_OUTPUT"
 
 	# ---------------- IPv4 ----------------
 	printf '\t\tNET_IP4: {\n'
-
-	# Special ASN 114514: global match across all downstream prefix lists (IRR + CUSTOM)
-	printf '\t\t\tif (ASN = 114514) then {\n'
-	for asn in "${DOWNSTREAM_ASNS[@]}"; do
-		printf '\t\t\t\tif (net ~ DOWNSTREAM_PREFIXES_AS%s_IPV4) || (net ~ DOWNSTREAM_PREFIXES_AS%s_CUSTOM_IPV4) then return true;\n' "$asn" "$asn"
-	done
-	printf '\t\t\t\treturn false;\n'
-	printf '\t\t\t}\n'
-
-	# Normal case: ASN must be downstream, and match only its own IRR/CUSTOM list
-	printf '\t\t\tif !(ASN ~ ASN_DOWNSTREAM) then return false;\n'
+	printf '\t\t\tif ASN !~ ASN_DOWNSTREAM then return false;\n'
 	for asn in "${DOWNSTREAM_ASNS[@]}"; do
 		printf '\t\t\tif (ASN = %s) then return (net ~ DOWNSTREAM_PREFIXES_AS%s_IPV4) || (net ~ DOWNSTREAM_PREFIXES_AS%s_CUSTOM_IPV4);\n' "$asn" "$asn" "$asn"
 	done
@@ -161,17 +174,7 @@ echo "Done. Wrote: $IRR_OUTPUT"
 
 	# ---------------- IPv6 ----------------
 	printf '\t\tNET_IP6: {\n'
-
-	# Special ASN 114514: global match across all downstream prefix lists (IRR + CUSTOM)
-	printf '\t\t\tif (ASN = 114514) then {\n'
-	for asn in "${DOWNSTREAM_ASNS[@]}"; do
-		printf '\t\t\t\tif (net ~ DOWNSTREAM_PREFIXES_AS%s_IPV6) || (net ~ DOWNSTREAM_PREFIXES_AS%s_CUSTOM_IPV6) then return true;\n' "$asn" "$asn"
-	done
-	printf '\t\t\t\treturn false;\n'
-	printf '\t\t\t}\n'
-
-	# Normal case: ASN must be downstream, and match only its own IRR/CUSTOM list
-	printf '\t\t\tif !(ASN ~ ASN_DOWNSTREAM) then return false;\n'
+	printf '\t\t\tif ASN !~ ASN_DOWNSTREAM then return false;\n'
 	for asn in "${DOWNSTREAM_ASNS[@]}"; do
 		printf '\t\t\tif (ASN = %s) then return (net ~ DOWNSTREAM_PREFIXES_AS%s_IPV6) || (net ~ DOWNSTREAM_PREFIXES_AS%s_CUSTOM_IPV6);\n' "$asn" "$asn" "$asn"
 	done
